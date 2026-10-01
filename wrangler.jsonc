@@ -1,8 +1,18 @@
 {
   "name": "the-last-player",
+  "main": "src/worker.js",
   "compatibility_date": "2026-09-30",
   "assets": {
     "directory": "./public",
-    "not_found_handling": "404-page"
-  }
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/ws"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "GAME_ROOM", "class_name": "GameRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GameRoom"] }
+  ]
 }
