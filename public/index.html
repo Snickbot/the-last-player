@@ -9,21 +9,41 @@ html,body{margin:0;height:100%;background:#050607;overflow:hidden;touch-action:n
 canvas{display:block;width:100%;height:100%}
 #fx{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 45%,rgba(0,0,0,.75) 100%)}
 #grain{position:fixed;inset:0;pointer-events:none;opacity:.12;mix-blend-mode:overlay;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
-#hud{position:fixed;top:10px;left:12px;color:#9aa4ae;font-size:12px;letter-spacing:.15em;pointer-events:none;line-height:1.6}
+#hud{position:fixed;top:10px;left:12px;right:12px;color:#9aa4ae;font-size:12px;letter-spacing:.12em;pointer-events:none;line-height:1.6}
 #room{color:#e0e6ec;font-size:14px}
 #net{color:#7fb88f}
+#role{font-size:13px;font-weight:700}
+#obj{color:#cfd6dd;letter-spacing:.04em;margin-top:2px}
+#banner{position:fixed;left:0;right:0;top:34%;text-align:center;color:#fff;font-size:26px;font-weight:800;letter-spacing:.2em;pointer-events:none;opacity:0;transition:opacity .6s;text-shadow:0 0 20px rgba(0,0,0,.9)}
+#banner small{display:block;font-size:13px;font-weight:500;letter-spacing:.1em;color:#b8c0c8;margin-top:8px}
+#toast{position:fixed;left:0;right:0;bottom:130px;text-align:center;color:#ffb4b4;font-size:13px;pointer-events:none;opacity:0;transition:opacity .3s}
+.panel{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);width:min(320px,86vw);display:none;z-index:5;touch-action:none}
+.btn{display:block;width:100%;padding:18px 0;border:2px solid #5a6672;border-radius:14px;background:rgba(20,26,32,.85);color:#e6ebf0;font-size:16px;font-weight:700;letter-spacing:.14em;touch-action:none;-webkit-user-select:none;user-select:none}
+.btn:disabled{opacity:.4}
+.btn.hot{border-color:#c0392b;color:#ffd6d0}
+.btn.good{border-color:#3fa66b;color:#d4ffe6}
+#bar{height:10px;border-radius:6px;background:#1b2229;margin-bottom:8px;overflow:hidden}
+#barIn{height:100%;width:0;background:#c0392b}
+#enTxt{color:#d9a9a2;font-size:12px;letter-spacing:.1em;margin-bottom:6px;text-align:center}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="fx"></div>
 <div id="grain"></div>
-<div id="hud">THE LAST PLAYER · PROTOTYPE v0.3<br>Move: WASD / arrows, or drag your finger<br><span id="net">Connecting...</span><br><span id="room"></span></div>
+<div id="hud">THE LAST PLAYER · PROTOTYPE v0.4<br>Move: WASD / arrows, or drag your finger<br><span id="net">Connecting...</span><br><span id="room"></span><br><span id="role"></span><div id="obj"></div></div>
+<div id="banner"></div>
+<div id="toast"></div>
+<div class="panel" id="startP"><button class="btn good" id="startBtn">START GAME</button></div>
+<div class="panel" id="repP"><button class="btn good" id="repBtn">HOLD TO REPAIR</button></div>
+<div class="panel" id="ctlP"><div id="enTxt"></div><div id="bar"><div id="barIn"></div></div><button class="btn hot" id="lightsBtn">LIGHTS OFF (2)</button></div>
 <script>
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 const dk=document.createElement('canvas'),dx=dk.getContext('2d');
-const roomEl=document.getElementById('room');
-const netEl=document.getElementById('net');
+const $=id=>document.getElementById(id);
+const roomEl=$('room'),netEl=$('net'),roleEl=$('role'),objEl=$('obj'),bannerEl=$('banner'),toastEl=$('toast');
+const startP=$('startP'),repP=$('repP'),ctlP=$('ctlP');
+const startBtn=$('startBtn'),repBtn=$('repBtn'),lightsBtn=$('lightsBtn');
 let W,H,DPR;
 function resize(){
   DPR=Math.min(window.devicePixelRatio||1,2);
@@ -75,6 +95,7 @@ for(let j=0;j<GH;j++){
   }
 }
 for(const q of props)blockers.push({x:q[0]*T,y:q[1]*T,w:T,h:T});
+const GENX=70*T,GENY=41*T;
 
 /* ---------- PLAYER / INPUT ---------- */
 const p={x:11*T+(Math.random()*120-60),y:42*T+(Math.random()*120-60),r:13,face:-Math.PI/2};
@@ -91,6 +112,24 @@ function endJoy(e){if(e.pointerId===joy.id){joy.on=false;joy.id=null;}}
 cv.addEventListener('pointerup',endJoy);
 cv.addEventListener('pointercancel',endJoy);
 
+/* ---------- GAME STATE (from server) ---------- */
+let role=null;
+let st={phase:'lobby',power:true,repair:0,need:20};
+const en={v:0,max:30,regen:0.05,at:0,cdEnd:0};
+function curEn(){return Math.min(en.max,en.v+(performance.now()-en.at)/1000*en.regen);}
+let bannerTimer=null,toastTimer=null;
+function showBanner(big,small){
+  bannerEl.innerHTML=big+'<small>'+small+'</small>';
+  bannerEl.style.opacity=1;
+  clearTimeout(bannerTimer);
+  bannerTimer=setTimeout(()=>{bannerEl.style.opacity=0;},4500);
+}
+function toast(t){
+  toastEl.textContent=t;toastEl.style.opacity=1;
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{toastEl.style.opacity=0;},2200);
+}
+
 /* ---------- NETWORK ---------- */
 const params=new URLSearchParams(location.search);
 const ROOM=((params.get('room')||'LOBBY').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8))||'LOBBY';
@@ -103,6 +142,7 @@ function addOther(q){
   others.set(q.id,{x:q.x,y:q.y,f:q.f||0,tx:q.x,ty:q.y,tf:q.f||0,hue:hueOf(q.id)});
 }
 function status(){setNet('Online · Room '+ROOM+' · Players: '+(others.size+1));}
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
 function connect(){
   const proto=location.protocol==='https:'?'wss:':'ws:';
   try{ws=new WebSocket(proto+'//'+location.host+'/ws?room='+ROOM);}
@@ -110,18 +150,52 @@ function connect(){
   ws.onopen=()=>status();
   ws.onmessage=ev=>{
     let d;try{d=JSON.parse(ev.data);}catch(e){return;}
-    if(d.t==='welcome'){myId=d.id;others.clear();for(const q of d.players)addOther(q);status();}
+    if(d.t==='welcome'){
+      myId=d.id;others.clear();for(const q of d.players)addOther(q);
+      role=d.role;if(d.state)st=Object.assign(st,d.state);
+      status();
+      if(role==='survivor')showBanner('YOU ARE A SURVIVOR','A game is already running');
+    }
     else if(d.t==='join'){addOther(d.p);status();}
     else if(d.t==='move'){
       const o=others.get(d.id);
       if(o){o.tx=d.x;o.ty=d.y;o.tf=d.f;}else addOther(d);
     }
     else if(d.t==='leave'){others.delete(d.id);status();}
+    else if(d.t==='role'){
+      role=d.role;
+      if(role==='controller'){
+        en.v=d.energy;en.max=d.max;en.regen=d.regen;en.at=performance.now();en.cdEnd=0;
+        showBanner('YOU ARE THE CONTROLLER','Secretly cut the power. Do not get caught.');
+      }else{
+        showBanner('YOU ARE A SURVIVOR','Find out who is controlling the facility.');
+      }
+    }
+    else if(d.t==='state'){
+      const was=st.power;
+      st=Object.assign(st,{phase:d.phase,power:d.power,repair:d.repair,need:d.need});
+      if(was&&!st.power)toast('The power just went out!');
+      if(!was&&st.power)toast('Power restored');
+    }
+    else if(d.t==='energy'){
+      en.v=d.energy;en.max=d.max;en.regen=d.regen;en.at=performance.now();en.cdEnd=performance.now()+d.cdMs;
+    }
+    else if(d.t==='deny'){toast(d.why);}
   };
   ws.onclose=()=>{setNet('Disconnected · retrying...');others.clear();setTimeout(connect,2000);};
   ws.onerror=()=>{try{ws.close();}catch(e){}};
 }
 connect();
+
+/* ---------- BUTTONS ---------- */
+startBtn.addEventListener('click',()=>send({t:'start'}));
+lightsBtn.addEventListener('click',()=>send({t:'lights_off'}));
+let repTimer=null;
+function sendRep(){send({t:'repair'});}
+function startRep(){if(repTimer)return;sendRep();repTimer=setInterval(sendRep,400);}
+function stopRep(){clearInterval(repTimer);repTimer=null;}
+repBtn.addEventListener('pointerdown',e=>{e.preventDefault();startRep();});
+['pointerup','pointercancel','pointerleave'].forEach(ev=>repBtn.addEventListener(ev,stopRep));
 
 /* ---------- LIGHT ---------- */
 let segs=[];
@@ -177,6 +251,17 @@ function drawPerson(x,y,face,fill,dot){
   ctx.fillStyle=dot;
   ctx.beginPath();ctx.arc(x+Math.cos(face)*p.r*0.6,y+Math.sin(face)*p.r*0.6,4,0,7);ctx.fill();
 }
+function drawGenerator(){
+  ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(GENX-26,GENY-20,56,50);
+  ctx.fillStyle='#3a4046';ctx.fillRect(GENX-28,GENY-26,56,50);
+  ctx.strokeStyle='#59636d';ctx.lineWidth=3;ctx.strokeRect(GENX-28,GENY-26,56,50);
+  ctx.fillStyle=st.power?'#3fd07a':'#e04a3a';
+  ctx.beginPath();ctx.arc(GENX,GENY-8,7,0,7);ctx.fill();
+  if(!st.power&&st.repair>0){
+    ctx.fillStyle='#1b2229';ctx.fillRect(GENX-22,GENY+6,44,6);
+    ctx.fillStyle='#e0b43a';ctx.fillRect(GENX-22,GENY+6,44*Math.min(1,st.repair/st.need),6);
+  }
+}
 function frame(now){
   const dt=Math.min((now-last)/1000,0.05);last=now;
   let vx=0,vy=0;
@@ -221,6 +306,29 @@ function frame(now){
   const rI=rid[ty*GW+tx];
   roomEl.textContent=rI===99?'Corridor':rooms[rI][4];
 
+  /* ----- HUD / buttons ----- */
+  const playing=st.phase==='playing';
+  roleEl.textContent=role==='controller'?'ROLE: CONTROLLER':role==='survivor'?'ROLE: SURVIVOR':'';
+  roleEl.style.color=role==='controller'?'#e0675a':'#7fb88f';
+  const dGen=Math.hypot(p.x-GENX,p.y-GENY);
+  if(!playing){
+    objEl.textContent=others.size>=1?'Ready. Tap START GAME.':'Waiting for another player...';
+  }else if(role==='controller'){
+    objEl.textContent=st.power?'Cut the power and split the survivors.':'Power is out. Survivors are repairing it.';
+  }else{
+    objEl.textContent=st.power?'Explore. Stay alert.':'POWER OUT. Go to the Generator Room (far east) and hold REPAIR. '+st.repair+'/'+st.need;
+  }
+  startP.style.display=(!playing&&others.size>=1)?'block':'none';
+  repP.style.display=(playing&&role==='survivor'&&!st.power&&dGen<130)?'block':'none';
+  ctlP.style.display=(playing&&role==='controller')?'block':'none';
+  if(playing&&role==='controller'){
+    const e=curEn(),cd=Math.max(0,en.cdEnd-performance.now());
+    $('barIn').style.width=(100*e/en.max)+'%';
+    $('enTxt').textContent='ENERGY '+e.toFixed(1)+' / '+en.max;
+    lightsBtn.disabled=!st.power||cd>0||e<2;
+    lightsBtn.textContent=cd>0?'RECHARGING '+Math.ceil(cd/1000)+'s':'LIGHTS OFF (2)';
+  }
+
   const camx=p.x-W/2,camy=p.y-H/2;
 
   ctx.setTransform(1,0,0,1,0,0);
@@ -246,6 +354,7 @@ function frame(now){
       }
     }
   }
+  drawGenerator();
   for(const o of others.values()){
     drawPerson(o.x,o.y,o.f,'hsl('+o.hue+' 55% 62%)','hsl('+o.hue+' 40% 30%)');
   }
@@ -253,16 +362,17 @@ function frame(now){
 
   dx.globalCompositeOperation='source-over';
   dx.setTransform(1,0,0,1,0,0);
-  dx.fillStyle='rgba(2,3,5,0.93)';
+  dx.fillStyle=st.power?'rgba(2,3,5,0.93)':'rgba(1,2,3,0.985)';
   dx.fillRect(0,0,dk.width,dk.height);
   dx.setTransform(DPR,0,0,DPR,-camx*DPR,-camy*DPR);
   dx.globalCompositeOperation='destination-out';
-  if(rI!==99){
+  if(rI!==99&&st.power){
     const r=rooms[rI],lx=(r[0]+r[2]/2)*T,ly=(r[1]+r[3]/2)*T;
     punch(fan(lx,ly,0,Math.PI*2,90,260),lx,ly,260,0.4*fl);
   }
-  punch(fan(p.x,p.y,0,Math.PI*2,100,150),p.x,p.y,150,0.9*fl);
-  punch(fan(p.x,p.y,p.face-0.55,p.face+0.55,60,580),p.x,p.y,580,1*fl);
+  punch(fan(p.x,p.y,0,Math.PI*2,100,st.power?150:110),p.x,p.y,st.power?150:110,0.9*fl);
+  const rad=st.power?580:400;
+  punch(fan(p.x,p.y,p.face-0.55,p.face+0.55,60,rad),p.x,p.y,rad,1*fl);
 
   ctx.setTransform(1,0,0,1,0,0);
   ctx.drawImage(dk,0,0);
