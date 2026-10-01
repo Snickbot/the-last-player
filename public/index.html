@@ -11,17 +11,19 @@ canvas{display:block;width:100%;height:100%}
 #grain{position:fixed;inset:0;pointer-events:none;opacity:.12;mix-blend-mode:overlay;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
 #hud{position:fixed;top:10px;left:12px;color:#9aa4ae;font-size:12px;letter-spacing:.15em;pointer-events:none;line-height:1.6}
 #room{color:#e0e6ec;font-size:14px}
+#net{color:#7fb88f}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="fx"></div>
 <div id="grain"></div>
-<div id="hud">THE LAST PLAYER · PROTOTYPE v0.2<br>Move: WASD / arrows, or drag your finger<br><span id="room"></span></div>
+<div id="hud">THE LAST PLAYER · PROTOTYPE v0.3<br>Move: WASD / arrows, or drag your finger<br><span id="net">Connecting...</span><br><span id="room"></span></div>
 <script>
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 const dk=document.createElement('canvas'),dx=dk.getContext('2d');
 const roomEl=document.getElementById('room');
+const netEl=document.getElementById('net');
 let W,H,DPR;
 function resize(){
   DPR=Math.min(window.devicePixelRatio||1,2);
@@ -33,8 +35,8 @@ addEventListener('resize',resize);resize();
 
 /* ---------- MAP ---------- */
 const T=48,GW=80,GH=50;
-const g=new Uint8Array(GW*GH).fill(1);   /* 1 wall, 0 floor, 2 crate */
-const rid=new Uint8Array(GW*GH).fill(99); /* room id per tile */
+const g=new Uint8Array(GW*GH).fill(1);
+const rid=new Uint8Array(GW*GH).fill(99);
 const rooms=[
  [4,38,14,8,'Entrance',200],[22,38,12,8,'Security',210],
  [4,20,18,14,'Laboratory',160],[26,22,12,12,'Storage',30],
@@ -75,7 +77,7 @@ for(let j=0;j<GH;j++){
 for(const q of props)blockers.push({x:q[0]*T,y:q[1]*T,w:T,h:T});
 
 /* ---------- PLAYER / INPUT ---------- */
-const p={x:11*T,y:42*T,r:13,face:-Math.PI/2};
+const p={x:11*T+(Math.random()*120-60),y:42*T+(Math.random()*120-60),r:13,face:-Math.PI/2};
 const keys={};
 addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;});
 addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
@@ -88,6 +90,38 @@ cv.addEventListener('pointermove',e=>{if(e.pointerId===joy.id){joy.cx=e.clientX;
 function endJoy(e){if(e.pointerId===joy.id){joy.on=false;joy.id=null;}}
 cv.addEventListener('pointerup',endJoy);
 cv.addEventListener('pointercancel',endJoy);
+
+/* ---------- NETWORK ---------- */
+const params=new URLSearchParams(location.search);
+const ROOM=((params.get('room')||'LOBBY').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8))||'LOBBY';
+const others=new Map();
+let ws=null,myId=null,sendT=0,lastSent='';
+function setNet(t){netEl.textContent=t;}
+function hueOf(id){return parseInt(String(id).slice(0,4),16)%360;}
+function addOther(q){
+  if(!q||!q.id)return;
+  others.set(q.id,{x:q.x,y:q.y,f:q.f||0,tx:q.x,ty:q.y,tf:q.f||0,hue:hueOf(q.id)});
+}
+function status(){setNet('Online · Room '+ROOM+' · Players: '+(others.size+1));}
+function connect(){
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  try{ws=new WebSocket(proto+'//'+location.host+'/ws?room='+ROOM);}
+  catch(e){setNet('Offline');return;}
+  ws.onopen=()=>status();
+  ws.onmessage=ev=>{
+    let d;try{d=JSON.parse(ev.data);}catch(e){return;}
+    if(d.t==='welcome'){myId=d.id;others.clear();for(const q of d.players)addOther(q);status();}
+    else if(d.t==='join'){addOther(d.p);status();}
+    else if(d.t==='move'){
+      const o=others.get(d.id);
+      if(o){o.tx=d.x;o.ty=d.y;o.tf=d.f;}else addOther(d);
+    }
+    else if(d.t==='leave'){others.delete(d.id);status();}
+  };
+  ws.onclose=()=>{setNet('Disconnected · retrying...');others.clear();setTimeout(connect,2000);};
+  ws.onerror=()=>{try{ws.close();}catch(e){}};
+}
+connect();
 
 /* ---------- LIGHT ---------- */
 let segs=[];
@@ -135,6 +169,14 @@ function resolve(){
     }
   }
 }
+function drawPerson(x,y,face,fill,dot){
+  ctx.fillStyle='rgba(0,0,0,.45)';
+  ctx.beginPath();ctx.ellipse(x+3,y+5,p.r,p.r*0.8,0,0,7);ctx.fill();
+  ctx.fillStyle=fill;
+  ctx.beginPath();ctx.arc(x,y,p.r,0,7);ctx.fill();
+  ctx.fillStyle=dot;
+  ctx.beginPath();ctx.arc(x+Math.cos(face)*p.r*0.6,y+Math.sin(face)*p.r*0.6,4,0,7);ctx.fill();
+}
 function frame(now){
   const dt=Math.min((now-last)/1000,0.05);last=now;
   let vx=0,vy=0;
@@ -158,6 +200,19 @@ function frame(now){
   }
   segs=[];
   for(const b of near)segs.push([b.x,b.y,b.x+b.w,b.y],[b.x+b.w,b.y,b.x+b.w,b.y+b.h],[b.x+b.w,b.y+b.h,b.x,b.y+b.h],[b.x,b.y+b.h,b.x,b.y]);
+
+  sendT+=dt;
+  if(sendT>=0.1){
+    sendT=0;
+    if(ws&&ws.readyState===1){
+      const msg=JSON.stringify({t:'move',x:Math.round(p.x),y:Math.round(p.y),f:Math.round(p.face*100)/100});
+      if(msg!==lastSent){ws.send(msg);lastSent=msg;}
+    }
+  }
+  for(const o of others.values()){
+    const k=Math.min(1,dt*12);
+    o.x+=(o.tx-o.x)*k;o.y+=(o.ty-o.y)*k;o.f+=(o.tf-o.f)*k;
+  }
 
   if(flickT<=0&&Math.random()<0.004)flickT=0.15;
   if(flickT>0){flickT-=dt;fl=0.4+Math.random()*0.4;}else fl=1;
@@ -191,12 +246,10 @@ function frame(now){
       }
     }
   }
-  ctx.fillStyle='rgba(0,0,0,.45)';
-  ctx.beginPath();ctx.ellipse(p.x+3,p.y+5,p.r,p.r*0.8,0,0,7);ctx.fill();
-  ctx.fillStyle='#c9d3dc';
-  ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();
-  ctx.fillStyle='#7d8a96';
-  ctx.beginPath();ctx.arc(p.x+Math.cos(p.face)*p.r*0.6,p.y+Math.sin(p.face)*p.r*0.6,4,0,7);ctx.fill();
+  for(const o of others.values()){
+    drawPerson(o.x,o.y,o.f,'hsl('+o.hue+' 55% 62%)','hsl('+o.hue+' 40% 30%)');
+  }
+  drawPerson(p.x,p.y,p.face,'#c9d3dc','#7d8a96');
 
   dx.globalCompositeOperation='source-over';
   dx.setTransform(1,0,0,1,0,0);
