@@ -6,13 +6,21 @@ const MAP_H = 50 * 48;
 
 /* Game settings: you can change these numbers later */
 const CFG = {
+  matchMs: 8 * 60 * 1000,
   controllerEnergy: 30,
   energyRegenPerSec: 0.05,
   lightsOffCost: 2,
   lightsOffCooldownMs: 12000,
   repairNeeded: 20,
-  repairMinGapMs: 350,
   repairRange: 150,
+  pulseGapMs: 350,
+  terminalNeeded: 20,
+  terminalRange: 110,
+  terminals: [
+    { name: "Laboratory", x: 13.5 * 48, y: 27.5 * 48 },
+    { name: "Server Room", x: 70.5 * 48, y: 25.5 * 48 },
+    { name: "Control Room", x: 52.5 * 48, y: 10.5 * 48 },
+  ],
 };
 const GEN = { x: 70 * 48, y: 41 * 48 };
 
@@ -30,6 +38,8 @@ function freshState() {
     energy: CFG.controllerEnergy,
     energyAt: Date.now(),
     cdLights: 0,
+    terms: CFG.terminals.map(() => 0),
+    endAt: 0,
   };
 }
 
@@ -59,6 +69,10 @@ export class GameRoom extends DurableObject {
       power: s.power,
       repair: s.repair,
       need: CFG.repairNeeded,
+      terms: s.terms,
+      termNeed: CFG.terminalNeeded,
+      termNames: CFG.terminals.map((x) => x.name),
+      left: s.phase === "playing" ? Math.max(0, s.endAt - Date.now()) : 0,
     };
   }
 
@@ -89,6 +103,7 @@ export class GameRoom extends DurableObject {
     if (sockets.length === 0 && s.phase !== "lobby") {
       s = freshState();
       await this.saveState(s);
+      await this.ctx.storage.deleteAlarm();
     }
 
     const pair = new WebSocketPair();
@@ -98,7 +113,10 @@ export class GameRoom extends DurableObject {
 
     const id = crypto.randomUUID().slice(0, 8);
     const role = s.phase === "playing" ? "survivor" : null;
-    const me = { id: id, x: 11 * 48, y: 42 * 48, f: 0, role: role, lastRepair: 0 };
+    const me = {
+      id: id, x: 11 * 48, y: 42 * 48, f: 0,
+      role: role, lastRepair: 0, lastTerm: 0,
+    };
     server.serializeAttachment(me);
 
     const others = [];
@@ -140,26 +158,39 @@ export class GameRoom extends DurableObject {
       ws.serializeAttachment(me);
       this.broadcast({ t: "move", id: me.id, x: me.x, y: me.y, f: me.f }, ws);
     } else if (data.t === "start") {
-      await this.startGame();
+      await this.startGame(ws);
     } else if (data.t === "lights_off") {
       await this.lightsOff(ws, me, now);
     } else if (data.t === "repair") {
       await this.repair(ws, me, now);
+    } else if (data.t === "terminal") {
+      await this.terminal(ws, me, data, now);
     }
   }
 
-  async startGame() {
+  async startGame(ws) {
+    const cur = await this.getState();
+    if (cur.phase === "playing") {
+      this.sendTo(ws, { t: "deny", why: "A game is already running" });
+      return;
+    }
     const sockets = this.ctx.getWebSockets();
-    if (sockets.length < 2) return;
+    if (sockets.length < 2) {
+      this.sendTo(ws, { t: "deny", why: "Need at least 2 players" });
+      return;
+    }
     const pick = Math.floor(Math.random() * sockets.length);
     const s = freshState();
     s.phase = "playing";
+    s.endAt = Date.now() + CFG.matchMs;
+    await this.ctx.storage.setAlarm(s.endAt);
     for (let i = 0; i < sockets.length; i++) {
       const sock = sockets[i];
       const a = sock.deserializeAttachment();
       if (!a) continue;
       a.role = i === pick ? "controller" : "survivor";
       a.lastRepair = 0;
+      a.lastTerm = 0;
       sock.serializeAttachment(a);
       if (a.role === "controller") {
         this.sendTo(sock, {
@@ -214,7 +245,7 @@ export class GameRoom extends DurableObject {
     if (me.role !== "survivor") return;
     const s = await this.getState();
     if (s.phase !== "playing" || s.power) return;
-    if (now - (me.lastRepair || 0) < CFG.repairMinGapMs) return;
+    if (now - (me.lastRepair || 0) < CFG.pulseGapMs) return;
     const d = Math.hypot(me.x - GEN.x, me.y - GEN.y);
     if (d > CFG.repairRange) return;
     me.lastRepair = now;
@@ -228,12 +259,59 @@ export class GameRoom extends DurableObject {
     this.broadcast(this.stateMsg(s));
   }
 
+  async terminal(ws, me, data, now) {
+    if (me.role !== "survivor") return;
+    const s = await this.getState();
+    if (s.phase !== "playing" || !s.power) return;
+    const i = Math.floor(Number(data.i));
+    if (!(i >= 0 && i < CFG.terminals.length)) return;
+    if (s.terms[i] >= CFG.terminalNeeded) return;
+    if (now - (me.lastTerm || 0) < CFG.pulseGapMs) return;
+    const t = CFG.terminals[i];
+    if (Math.hypot(me.x - t.x, me.y - t.y) > CFG.terminalRange) return;
+    me.lastTerm = now;
+    ws.serializeAttachment(me);
+    s.terms[i] += 1;
+    const done = s.terms.every((v) => v >= CFG.terminalNeeded);
+    await this.saveState(s);
+    this.broadcast(this.stateMsg(s));
+    if (done) await this.endGame(s, "survivors", "All terminals activated");
+  }
+
+  async endGame(s, winner, reason) {
+    s.phase = "ended";
+    await this.saveState(s);
+    let cid = null;
+    for (const w of this.ctx.getWebSockets()) {
+      const a = w.deserializeAttachment();
+      if (a && a.role === "controller") cid = a.id;
+    }
+    this.broadcast(this.stateMsg(s));
+    this.broadcast({ t: "end", winner: winner, reason: reason, controller: cid });
+    await this.ctx.storage.deleteAlarm();
+  }
+
+  async alarm() {
+    const s = await this.getState();
+    if (s.phase === "playing" && Date.now() >= s.endAt - 100) {
+      await this.endGame(s, "controller", "Time ran out");
+    }
+  }
+
   async webSocketClose(ws, code, reason, wasClean) {
     const me = ws.deserializeAttachment();
     try {
       ws.close(code, "closing");
     } catch (e) {}
-    if (me) this.broadcast({ t: "leave", id: me.id }, ws);
+    if (me) {
+      this.broadcast({ t: "leave", id: me.id }, ws);
+      if (me.role === "controller") {
+        const s = await this.getState();
+        if (s.phase === "playing") {
+          await this.endGame(s, "survivors", "The Controller disconnected");
+        }
+      }
+    }
   }
 
   async webSocketError(ws, error) {
