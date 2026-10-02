@@ -17,12 +17,13 @@ canvas{display:block;width:100%;height:100%}
 #time{position:fixed;top:10px;right:14px;color:#e0e6ec;font-size:18px;font-weight:700;letter-spacing:.1em;pointer-events:none}
 #banner{position:fixed;left:0;right:0;top:34%;text-align:center;color:#fff;font-size:26px;font-weight:800;letter-spacing:.2em;pointer-events:none;opacity:0;transition:opacity .6s;text-shadow:0 0 20px rgba(0,0,0,.9)}
 #banner small{display:block;font-size:13px;font-weight:500;letter-spacing:.1em;color:#b8c0c8;margin-top:8px}
-#toast{position:fixed;left:0;right:0;bottom:130px;text-align:center;color:#ffb4b4;font-size:13px;pointer-events:none;opacity:0;transition:opacity .3s}
+#toast{position:fixed;left:0;right:0;bottom:200px;text-align:center;color:#ffb4b4;font-size:13px;pointer-events:none;opacity:0;transition:opacity .3s}
 .panel{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);width:min(320px,86vw);display:none;z-index:5;touch-action:none}
-.btn{display:block;width:100%;padding:18px 0;border:2px solid #5a6672;border-radius:14px;background:rgba(20,26,32,.85);color:#e6ebf0;font-size:16px;font-weight:700;letter-spacing:.14em;touch-action:none;-webkit-user-select:none;user-select:none}
+.btn{display:block;width:100%;padding:16px 0;border:2px solid #5a6672;border-radius:14px;background:rgba(20,26,32,.85);color:#e6ebf0;font-size:15px;font-weight:700;letter-spacing:.14em;touch-action:none;-webkit-user-select:none;user-select:none;margin-top:8px}
 .btn:disabled{opacity:.4}
 .btn.hot{border-color:#c0392b;color:#ffd6d0}
 .btn.good{border-color:#3fa66b;color:#d4ffe6}
+.btn.cool{border-color:#4a86c0;color:#d6e8ff}
 #bar{height:10px;border-radius:6px;background:#1b2229;margin-bottom:8px;overflow:hidden}
 #barIn{height:100%;width:0;background:#c0392b}
 #enTxt{color:#d9a9a2;font-size:12px;letter-spacing:.1em;margin-bottom:6px;text-align:center}
@@ -37,14 +38,14 @@ canvas{display:block;width:100%;height:100%}
 <canvas id="c"></canvas>
 <div id="fx"></div>
 <div id="grain"></div>
-<div id="hud">THE LAST PLAYER · PROTOTYPE v0.5<br>Move: WASD / arrows, or drag your finger<br><span id="net">Connecting...</span><br><span id="room"></span><br><span id="role"></span><div id="obj"></div></div>
+<div id="hud">THE LAST PLAYER · PROTOTYPE v0.6<br>Move: WASD / arrows, or drag your finger<br><span id="net">Connecting...</span><br><span id="room"></span><br><span id="role"></span><div id="obj"></div></div>
 <div id="time"></div>
 <div id="banner"></div>
 <div id="toast"></div>
 <div class="panel" id="startP"><button class="btn good" id="startBtn">START GAME</button></div>
 <div class="panel" id="repP"><button class="btn good" id="repBtn">HOLD TO REPAIR</button></div>
 <div class="panel" id="termP"><button class="btn good" id="termBtn">HOLD TO ACTIVATE</button></div>
-<div class="panel" id="ctlP"><div id="enTxt"></div><div id="bar"><div id="barIn"></div></div><button class="btn hot" id="lightsBtn">LIGHTS OFF (2)</button></div>
+<div class="panel" id="ctlP"><div id="enTxt"></div><div id="bar"><div id="barIn"></div></div><button class="btn hot" id="lightsBtn">LIGHTS OFF (2)</button><button class="btn cool" id="soundBtn">FAKE SOUND (2)</button></div>
 <div id="end"><div id="endT"></div><div id="endS"></div><div id="endC"></div><button class="btn good" id="againBtn">PLAY AGAIN</button></div>
 <script>
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
@@ -52,7 +53,7 @@ const dk=document.createElement('canvas'),dx=dk.getContext('2d');
 const $=id=>document.getElementById(id);
 const roomEl=$('room'),netEl=$('net'),roleEl=$('role'),objEl=$('obj'),bannerEl=$('banner'),toastEl=$('toast'),timeEl=$('time');
 const startP=$('startP'),repP=$('repP'),ctlP=$('ctlP'),termP=$('termP');
-const startBtn=$('startBtn'),repBtn=$('repBtn'),lightsBtn=$('lightsBtn'),termBtn=$('termBtn'),againBtn=$('againBtn');
+const startBtn=$('startBtn'),repBtn=$('repBtn'),lightsBtn=$('lightsBtn'),soundBtn=$('soundBtn'),termBtn=$('termBtn'),againBtn=$('againBtn');
 const endEl=$('end'),endT=$('endT'),endS=$('endS'),endC=$('endC');
 let W,H,DPR;
 function resize(){
@@ -128,10 +129,56 @@ function endJoy(e){if(e.pointerId===joy.id){joy.on=false;joy.id=null;}}
 cv.addEventListener('pointerup',endJoy);
 cv.addEventListener('pointercancel',endJoy);
 
+/* ---------- AUDIO ---------- */
+let AC=null;
+function unlockAudio(){
+  if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){AC=null;}}
+  if(AC&&AC.state==='suspended')AC.resume();
+}
+addEventListener('pointerdown',unlockAudio);
+addEventListener('keydown',unlockAudio);
+function playThud(wx,wy){
+  if(!AC)return;
+  const ax=wx-p.x,ay=wy-p.y,dist=Math.hypot(ax,ay);
+  const vol=Math.max(0.08,Math.min(0.9,1.1-dist/1500));
+  const t0=AC.currentTime;
+  const out=AC.createGain();out.gain.value=vol;
+  if(AC.createStereoPanner){
+    const pan=AC.createStereoPanner();
+    pan.pan.value=Math.max(-1,Math.min(1,ax/600));
+    out.connect(pan);pan.connect(AC.destination);
+  }else out.connect(AC.destination);
+  const o=AC.createOscillator();o.type='sine';
+  o.frequency.setValueAtTime(110,t0);
+  o.frequency.exponentialRampToValueAtTime(45,t0+0.25);
+  const og=AC.createGain();
+  og.gain.setValueAtTime(0.9,t0);
+  og.gain.exponentialRampToValueAtTime(0.001,t0+0.35);
+  o.connect(og);og.connect(out);o.start(t0);o.stop(t0+0.4);
+  const len=Math.floor(AC.sampleRate*0.2);
+  const buf=AC.createBuffer(1,len,AC.sampleRate);
+  const d=buf.getChannelData(0);
+  for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*(1-i/len);
+  const ns=AC.createBufferSource();ns.buffer=buf;
+  const lp=AC.createBiquadFilter();lp.type='lowpass';lp.frequency.value=600;
+  ns.connect(lp);lp.connect(out);ns.start(t0);
+}
+function dirWord(ax,ay){
+  const a=Math.atan2(ay,ax)*180/Math.PI;
+  if(a>=-22.5&&a<22.5)return 'east';
+  if(a>=22.5&&a<67.5)return 'south-east';
+  if(a>=67.5&&a<112.5)return 'south';
+  if(a>=112.5&&a<157.5)return 'south-west';
+  if(a>=157.5||a<-157.5)return 'west';
+  if(a>=-157.5&&a<-112.5)return 'north-west';
+  if(a>=-112.5&&a<-67.5)return 'north';
+  return 'north-east';
+}
+
 /* ---------- GAME STATE (from server) ---------- */
 let role=null,endInfo=null;
 let st={phase:'lobby',power:true,repair:0,need:20,terms:[0,0,0],termNeed:20,leftAt:0};
-const en={v:0,max:30,regen:0.05,at:0,cdEnd:0};
+const en={v:0,max:30,regen:0.05,at:0,cdL:0,cdS:0};
 function curEn(){return Math.min(en.max,en.v+(performance.now()-en.at)/1000*en.regen);}
 let bannerTimer=null,toastTimer=null;
 function showBanner(big,small){
@@ -143,7 +190,7 @@ function showBanner(big,small){
 function toast(t){
   toastEl.textContent=t;toastEl.style.opacity=1;
   clearTimeout(toastTimer);
-  toastTimer=setTimeout(()=>{toastEl.style.opacity=0;},2200);
+  toastTimer=setTimeout(()=>{toastEl.style.opacity=0;},2400);
 }
 function applyState(d){
   const was=st.power,wasPhase=st.phase;
@@ -191,7 +238,7 @@ function connect(){
     else if(d.t==='role'){
       role=d.role;endInfo=null;
       if(role==='controller'){
-        en.v=d.energy;en.max=d.max;en.regen=d.regen;en.at=performance.now();en.cdEnd=0;
+        en.v=d.energy;en.max=d.max;en.regen=d.regen;en.at=performance.now();en.cdL=0;en.cdS=0;
         showBanner('YOU ARE THE CONTROLLER','Stop them activating the terminals. Do not get caught.');
       }else{
         showBanner('YOU ARE A SURVIVOR','Activate all 3 terminals before time runs out.');
@@ -199,7 +246,13 @@ function connect(){
     }
     else if(d.t==='state'){applyState(d);}
     else if(d.t==='energy'){
-      en.v=d.energy;en.max=d.max;en.regen=d.regen;en.at=performance.now();en.cdEnd=performance.now()+d.cdMs;
+      en.v=d.energy;en.max=d.max;en.regen=d.regen;en.at=performance.now();
+      if(d.ability==='sound')en.cdS=performance.now()+d.cdMs;
+      else en.cdL=performance.now()+d.cdMs;
+    }
+    else if(d.t==='sound'){
+      playThud(d.x,d.y);
+      toast('[a dull thud to the '+dirWord(d.x-p.x,d.y-p.y)+']');
     }
     else if(d.t==='end'){endInfo=d;}
     else if(d.t==='deny'){toast(d.why);}
@@ -213,6 +266,7 @@ connect();
 startBtn.addEventListener('click',()=>send({t:'start'}));
 againBtn.addEventListener('click',()=>send({t:'start'}));
 lightsBtn.addEventListener('click',()=>send({t:'lights_off'}));
+soundBtn.addEventListener('click',()=>send({t:'fake_sound'}));
 let repTimer=null,termTimer=null,termIdx=-1;
 function holdStart(kind){
   if(kind==='rep'){
@@ -376,7 +430,7 @@ function frame(now){
   if(!playing){
     objEl.textContent=st.phase==='lobby'?(others.size>=1?'Ready. Tap START GAME.':'Waiting for another player...'):'';
   }else if(role==='controller'){
-    objEl.textContent='Terminals done: '+doneN+'/3. '+(st.power?'Cut the power to slow them.':'Power is out.');
+    objEl.textContent='Terminals done: '+doneN+'/3. '+(st.power?'Cut the power or fake a sound to split them.':'Power is out.');
   }else{
     objEl.textContent=st.power?'Terminals done: '+doneN+'/3. Find: '+TERMS.filter((t,i)=>(st.terms[i]||0)<st.termNeed).map(t=>t.name).join(', '):'POWER OUT. Go to the Generator Room (far east) and hold REPAIR. '+st.repair+'/'+st.need;
   }
@@ -386,11 +440,13 @@ function frame(now){
   termP.style.display=(playing&&role==='survivor'&&st.power&&nearT>=0)?'block':'none';
   ctlP.style.display=(playing&&role==='controller')?'block':'none';
   if(playing&&role==='controller'){
-    const e=curEn(),cd=Math.max(0,en.cdEnd-performance.now());
+    const e=curEn(),cdL=Math.max(0,en.cdL-performance.now()),cdS=Math.max(0,en.cdS-performance.now());
     $('barIn').style.width=(100*e/en.max)+'%';
     $('enTxt').textContent='ENERGY '+e.toFixed(1)+' / '+en.max;
-    lightsBtn.disabled=!st.power||cd>0||e<2;
-    lightsBtn.textContent=cd>0?'RECHARGING '+Math.ceil(cd/1000)+'s':'LIGHTS OFF (2)';
+    lightsBtn.disabled=!st.power||cdL>0||e<2;
+    lightsBtn.textContent=cdL>0?'LIGHTS RECHARGING '+Math.ceil(cdL/1000)+'s':'LIGHTS OFF (2)';
+    soundBtn.disabled=cdS>0||e<2;
+    soundBtn.textContent=cdS>0?'SOUND RECHARGING '+Math.ceil(cdS/1000)+'s':'FAKE SOUND (2)';
   }
   if(!playing)holdStop();
 
@@ -400,12 +456,14 @@ function frame(now){
     endT.textContent=endInfo.winner==='survivors'?'SURVIVORS WIN':'THE CONTROLLER WINS';
     endT.style.color=iWon?'#7fe0a0':'#e0675a';
     endS.textContent=endInfo.reason;
-    if(role==='controller'){endC.textContent='You were the Controller.';endC.style.color='#e0675a';}
-    else if(endInfo.controller&&others.has(endInfo.controller)){
-      endC.textContent='The Controller was the '+'colored player shown below.';
-      endC.style.color='hsl('+hueOf(endInfo.controller)+' 55% 62%)';
+    if(role==='controller'){
+      endC.textContent='You were the Controller.';endC.style.color='#e0675a';
+    }else if(endInfo.controller&&others.has(endInfo.controller)){
       endC.textContent='The Controller was the player with this color.';
-    }else{endC.textContent='The Controller has left the room.';endC.style.color='#b8c0c8';}
+      endC.style.color='hsl('+hueOf(endInfo.controller)+' 55% 62%)';
+    }else{
+      endC.textContent='The Controller has left the room.';endC.style.color='#b8c0c8';
+    }
   }else endEl.style.display='none';
 
   const camx=p.x-W/2,camy=p.y-H/2;
