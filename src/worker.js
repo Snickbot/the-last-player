@@ -11,6 +11,9 @@ const CFG = {
   energyRegenPerSec: 0.05,
   lightsOffCost: 2,
   lightsOffCooldownMs: 12000,
+  soundCost: 2,
+  soundCooldownMs: 8000,
+  soundMinDistance: 500,
   repairNeeded: 20,
   repairRange: 150,
   pulseGapMs: 350,
@@ -23,6 +26,12 @@ const CFG = {
   ],
 };
 const GEN = { x: 70 * 48, y: 41 * 48 };
+
+/* Spots in each room where a fake sound can come from */
+const SOUND_SPOTS = [
+  [11, 42], [28, 42], [13, 27], [32, 28], [52, 41],
+  [70, 41], [70, 25], [32, 9], [52, 10], [70, 8],
+].map((c) => ({ x: (c[0] + 0.5) * 48, y: (c[1] + 0.5) * 48 }));
 
 function clamp(n, lo, hi) {
   n = Number(n);
@@ -38,6 +47,7 @@ function freshState() {
     energy: CFG.controllerEnergy,
     energyAt: Date.now(),
     cdLights: 0,
+    cdSound: 0,
     terms: CFG.terminals.map(() => 0),
     endAt: 0,
   };
@@ -161,6 +171,8 @@ export class GameRoom extends DurableObject {
       await this.startGame(ws);
     } else if (data.t === "lights_off") {
       await this.lightsOff(ws, me, now);
+    } else if (data.t === "fake_sound") {
+      await this.fakeSound(ws, me, now);
     } else if (data.t === "repair") {
       await this.repair(ws, me, now);
     } else if (data.t === "terminal") {
@@ -199,7 +211,6 @@ export class GameRoom extends DurableObject {
           energy: CFG.controllerEnergy,
           max: CFG.controllerEnergy,
           regen: CFG.energyRegenPerSec,
-          cdMs: 0,
         });
       } else {
         this.sendTo(sock, { t: "role", role: "survivor" });
@@ -234,10 +245,55 @@ export class GameRoom extends DurableObject {
     this.broadcast(this.stateMsg(s));
     this.sendTo(ws, {
       t: "energy",
+      ability: "lights",
       energy: s.energy,
       max: CFG.controllerEnergy,
       regen: CFG.energyRegenPerSec,
       cdMs: CFG.lightsOffCooldownMs,
+    });
+  }
+
+  async fakeSound(ws, me, now) {
+    if (me.role !== "controller") return;
+    const s = await this.getState();
+    if (s.phase !== "playing") return;
+    if (now < (s.cdSound || 0)) {
+      this.sendTo(ws, { t: "deny", why: "Ability is recharging" });
+      return;
+    }
+    const e = this.currentEnergy(s, now);
+    if (e < CFG.soundCost) {
+      this.sendTo(ws, { t: "deny", why: "Not enough energy" });
+      return;
+    }
+    const survivors = [];
+    for (const w of this.ctx.getWebSockets()) {
+      const a = w.deserializeAttachment();
+      if (a && a.role === "survivor") survivors.push({ w: w, a: a });
+    }
+    if (survivors.length === 0) return;
+
+    let spots = SOUND_SPOTS.filter((sp) =>
+      survivors.every((v) => Math.hypot(v.a.x - sp.x, v.a.y - sp.y) > CFG.soundMinDistance)
+    );
+    if (spots.length === 0) spots = SOUND_SPOTS;
+    const spot = spots[Math.floor(Math.random() * spots.length)];
+
+    s.energy = e - CFG.soundCost;
+    s.energyAt = now;
+    s.cdSound = now + CFG.soundCooldownMs;
+    await this.saveState(s);
+
+    for (const v of survivors) {
+      this.sendTo(v.w, { t: "sound", x: spot.x, y: spot.y });
+    }
+    this.sendTo(ws, {
+      t: "energy",
+      ability: "sound",
+      energy: s.energy,
+      max: CFG.controllerEnergy,
+      regen: CFG.energyRegenPerSec,
+      cdMs: CFG.soundCooldownMs,
     });
   }
 
