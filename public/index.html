@@ -14,6 +14,7 @@ canvas{display:block;width:100%;height:100%}
 #net{color:#7fb88f}
 #role{font-size:13px;font-weight:700}
 #obj{color:#cfd6dd;letter-spacing:.04em;margin-top:2px}
+#time{position:fixed;top:10px;right:14px;color:#e0e6ec;font-size:18px;font-weight:700;letter-spacing:.1em;pointer-events:none}
 #banner{position:fixed;left:0;right:0;top:34%;text-align:center;color:#fff;font-size:26px;font-weight:800;letter-spacing:.2em;pointer-events:none;opacity:0;transition:opacity .6s;text-shadow:0 0 20px rgba(0,0,0,.9)}
 #banner small{display:block;font-size:13px;font-weight:500;letter-spacing:.1em;color:#b8c0c8;margin-top:8px}
 #toast{position:fixed;left:0;right:0;bottom:130px;text-align:center;color:#ffb4b4;font-size:13px;pointer-events:none;opacity:0;transition:opacity .3s}
@@ -25,25 +26,34 @@ canvas{display:block;width:100%;height:100%}
 #bar{height:10px;border-radius:6px;background:#1b2229;margin-bottom:8px;overflow:hidden}
 #barIn{height:100%;width:0;background:#c0392b}
 #enTxt{color:#d9a9a2;font-size:12px;letter-spacing:.1em;margin-bottom:6px;text-align:center}
+#end{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.82);z-index:10;text-align:center;padding:24px}
+#endT{color:#fff;font-size:28px;font-weight:800;letter-spacing:.18em;margin-bottom:10px}
+#endS{color:#b8c0c8;font-size:14px;letter-spacing:.06em;margin-bottom:6px}
+#endC{font-size:15px;font-weight:700;margin-bottom:26px}
+#end .btn{width:min(280px,80vw)}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="fx"></div>
 <div id="grain"></div>
-<div id="hud">THE LAST PLAYER · PROTOTYPE v0.4<br>Move: WASD / arrows, or drag your finger<br><span id="net">Connecting...</span><br><span id="room"></span><br><span id="role"></span><div id="obj"></div></div>
+<div id="hud">THE LAST PLAYER · PROTOTYPE v0.5<br>Move: WASD / arrows, or drag your finger<br><span id="net">Connecting...</span><br><span id="room"></span><br><span id="role"></span><div id="obj"></div></div>
+<div id="time"></div>
 <div id="banner"></div>
 <div id="toast"></div>
 <div class="panel" id="startP"><button class="btn good" id="startBtn">START GAME</button></div>
 <div class="panel" id="repP"><button class="btn good" id="repBtn">HOLD TO REPAIR</button></div>
+<div class="panel" id="termP"><button class="btn good" id="termBtn">HOLD TO ACTIVATE</button></div>
 <div class="panel" id="ctlP"><div id="enTxt"></div><div id="bar"><div id="barIn"></div></div><button class="btn hot" id="lightsBtn">LIGHTS OFF (2)</button></div>
+<div id="end"><div id="endT"></div><div id="endS"></div><div id="endC"></div><button class="btn good" id="againBtn">PLAY AGAIN</button></div>
 <script>
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 const dk=document.createElement('canvas'),dx=dk.getContext('2d');
 const $=id=>document.getElementById(id);
-const roomEl=$('room'),netEl=$('net'),roleEl=$('role'),objEl=$('obj'),bannerEl=$('banner'),toastEl=$('toast');
-const startP=$('startP'),repP=$('repP'),ctlP=$('ctlP');
-const startBtn=$('startBtn'),repBtn=$('repBtn'),lightsBtn=$('lightsBtn');
+const roomEl=$('room'),netEl=$('net'),roleEl=$('role'),objEl=$('obj'),bannerEl=$('banner'),toastEl=$('toast'),timeEl=$('time');
+const startP=$('startP'),repP=$('repP'),ctlP=$('ctlP'),termP=$('termP');
+const startBtn=$('startBtn'),repBtn=$('repBtn'),lightsBtn=$('lightsBtn'),termBtn=$('termBtn'),againBtn=$('againBtn');
+const endEl=$('end'),endT=$('endT'),endS=$('endS'),endC=$('endC');
 let W,H,DPR;
 function resize(){
   DPR=Math.min(window.devicePixelRatio||1,2);
@@ -96,6 +106,12 @@ for(let j=0;j<GH;j++){
 }
 for(const q of props)blockers.push({x:q[0]*T,y:q[1]*T,w:T,h:T});
 const GENX=70*T,GENY=41*T;
+const TERMS=[
+ {name:'Laboratory',x:13.5*T,y:27.5*T},
+ {name:'Server Room',x:70.5*T,y:25.5*T},
+ {name:'Control Room',x:52.5*T,y:10.5*T}
+];
+const TERM_RANGE=110;
 
 /* ---------- PLAYER / INPUT ---------- */
 const p={x:11*T+(Math.random()*120-60),y:42*T+(Math.random()*120-60),r:13,face:-Math.PI/2};
@@ -113,8 +129,8 @@ cv.addEventListener('pointerup',endJoy);
 cv.addEventListener('pointercancel',endJoy);
 
 /* ---------- GAME STATE (from server) ---------- */
-let role=null;
-let st={phase:'lobby',power:true,repair:0,need:20};
+let role=null,endInfo=null;
+let st={phase:'lobby',power:true,repair:0,need:20,terms:[0,0,0],termNeed:20,leftAt:0};
 const en={v:0,max:30,regen:0.05,at:0,cdEnd:0};
 function curEn(){return Math.min(en.max,en.v+(performance.now()-en.at)/1000*en.regen);}
 let bannerTimer=null,toastTimer=null;
@@ -128,6 +144,16 @@ function toast(t){
   toastEl.textContent=t;toastEl.style.opacity=1;
   clearTimeout(toastTimer);
   toastTimer=setTimeout(()=>{toastEl.style.opacity=0;},2200);
+}
+function applyState(d){
+  const was=st.power,wasPhase=st.phase;
+  st.phase=d.phase;st.power=d.power;st.repair=d.repair;st.need=d.need;
+  if(d.terms){st.terms=d.terms;st.termNeed=d.termNeed;}
+  st.leftAt=performance.now()+(d.left||0);
+  if(d.phase==='playing'&&wasPhase==='playing'){
+    if(was&&!st.power)toast('The power just went out!');
+    if(!was&&st.power)toast('Power restored');
+  }
 }
 
 /* ---------- NETWORK ---------- */
@@ -152,7 +178,7 @@ function connect(){
     let d;try{d=JSON.parse(ev.data);}catch(e){return;}
     if(d.t==='welcome'){
       myId=d.id;others.clear();for(const q of d.players)addOther(q);
-      role=d.role;if(d.state)st=Object.assign(st,d.state);
+      role=d.role;if(d.state)applyState(d.state);
       status();
       if(role==='survivor')showBanner('YOU ARE A SURVIVOR','A game is already running');
     }
@@ -163,23 +189,19 @@ function connect(){
     }
     else if(d.t==='leave'){others.delete(d.id);status();}
     else if(d.t==='role'){
-      role=d.role;
+      role=d.role;endInfo=null;
       if(role==='controller'){
         en.v=d.energy;en.max=d.max;en.regen=d.regen;en.at=performance.now();en.cdEnd=0;
-        showBanner('YOU ARE THE CONTROLLER','Secretly cut the power. Do not get caught.');
+        showBanner('YOU ARE THE CONTROLLER','Stop them activating the terminals. Do not get caught.');
       }else{
-        showBanner('YOU ARE A SURVIVOR','Find out who is controlling the facility.');
+        showBanner('YOU ARE A SURVIVOR','Activate all 3 terminals before time runs out.');
       }
     }
-    else if(d.t==='state'){
-      const was=st.power;
-      st=Object.assign(st,{phase:d.phase,power:d.power,repair:d.repair,need:d.need});
-      if(was&&!st.power)toast('The power just went out!');
-      if(!was&&st.power)toast('Power restored');
-    }
+    else if(d.t==='state'){applyState(d);}
     else if(d.t==='energy'){
       en.v=d.energy;en.max=d.max;en.regen=d.regen;en.at=performance.now();en.cdEnd=performance.now()+d.cdMs;
     }
+    else if(d.t==='end'){endInfo=d;}
     else if(d.t==='deny'){toast(d.why);}
   };
   ws.onclose=()=>{setNet('Disconnected · retrying...');others.clear();setTimeout(connect,2000);};
@@ -189,13 +211,28 @@ connect();
 
 /* ---------- BUTTONS ---------- */
 startBtn.addEventListener('click',()=>send({t:'start'}));
+againBtn.addEventListener('click',()=>send({t:'start'}));
 lightsBtn.addEventListener('click',()=>send({t:'lights_off'}));
-let repTimer=null;
-function sendRep(){send({t:'repair'});}
-function startRep(){if(repTimer)return;sendRep();repTimer=setInterval(sendRep,400);}
-function stopRep(){clearInterval(repTimer);repTimer=null;}
-repBtn.addEventListener('pointerdown',e=>{e.preventDefault();startRep();});
-['pointerup','pointercancel','pointerleave'].forEach(ev=>repBtn.addEventListener(ev,stopRep));
+let repTimer=null,termTimer=null,termIdx=-1;
+function holdStart(kind){
+  if(kind==='rep'){
+    if(repTimer)return;
+    send({t:'repair'});repTimer=setInterval(()=>send({t:'repair'}),400);
+  }else{
+    if(termTimer)return;
+    send({t:'terminal',i:termIdx});termTimer=setInterval(()=>send({t:'terminal',i:termIdx}),400);
+  }
+}
+function holdStop(){
+  clearInterval(repTimer);repTimer=null;
+  clearInterval(termTimer);termTimer=null;
+}
+repBtn.addEventListener('pointerdown',e=>{e.preventDefault();holdStart('rep');});
+termBtn.addEventListener('pointerdown',e=>{e.preventDefault();holdStart('term');});
+['pointerup','pointercancel','pointerleave'].forEach(ev=>{
+  repBtn.addEventListener(ev,holdStop);
+  termBtn.addEventListener(ev,holdStop);
+});
 
 /* ---------- LIGHT ---------- */
 let segs=[];
@@ -262,6 +299,24 @@ function drawGenerator(){
     ctx.fillStyle='#e0b43a';ctx.fillRect(GENX-22,GENY+6,44*Math.min(1,st.repair/st.need),6);
   }
 }
+function drawTerminals(){
+  for(let i=0;i<TERMS.length;i++){
+    const t=TERMS[i],v=st.terms[i]||0,done=v>=st.termNeed;
+    ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(t.x-20,t.y-12,44,34);
+    ctx.fillStyle='#2f353b';ctx.fillRect(t.x-22,t.y-18,44,34);
+    ctx.strokeStyle='#59636d';ctx.lineWidth=3;ctx.strokeRect(t.x-22,t.y-18,44,34);
+    ctx.fillStyle=done?'#3fd07a':(!st.power?'#3a2a2a':'#d9a43a');
+    ctx.fillRect(t.x-16,t.y-13,32,16);
+    if(!done&&v>0){
+      ctx.fillStyle='#1b2229';ctx.fillRect(t.x-18,t.y+6,36,5);
+      ctx.fillStyle='#3fd07a';ctx.fillRect(t.x-18,t.y+6,36*Math.min(1,v/st.termNeed),5);
+    }
+  }
+}
+function fmt(ms){
+  const s=Math.ceil(ms/1000),m=Math.floor(s/60),r=s%60;
+  return m+':'+(r<10?'0':'')+r;
+}
 function frame(now){
   const dt=Math.min((now-last)/1000,0.05);last=now;
   let vx=0,vy=0;
@@ -308,18 +363,27 @@ function frame(now){
 
   /* ----- HUD / buttons ----- */
   const playing=st.phase==='playing';
+  const ended=st.phase==='ended'&&endInfo;
   roleEl.textContent=role==='controller'?'ROLE: CONTROLLER':role==='survivor'?'ROLE: SURVIVOR':'';
   roleEl.style.color=role==='controller'?'#e0675a':'#7fb88f';
+  timeEl.textContent=playing?fmt(Math.max(0,st.leftAt-performance.now())):'';
   const dGen=Math.hypot(p.x-GENX,p.y-GENY);
-  if(!playing){
-    objEl.textContent=others.size>=1?'Ready. Tap START GAME.':'Waiting for another player...';
-  }else if(role==='controller'){
-    objEl.textContent=st.power?'Cut the power and split the survivors.':'Power is out. Survivors are repairing it.';
-  }else{
-    objEl.textContent=st.power?'Explore. Stay alert.':'POWER OUT. Go to the Generator Room (far east) and hold REPAIR. '+st.repair+'/'+st.need;
+  let nearT=-1;
+  for(let i=0;i<TERMS.length;i++){
+    if((st.terms[i]||0)<st.termNeed&&Math.hypot(p.x-TERMS[i].x,p.y-TERMS[i].y)<TERM_RANGE-15)nearT=i;
   }
-  startP.style.display=(!playing&&others.size>=1)?'block':'none';
+  const doneN=st.terms.filter(v=>v>=st.termNeed).length;
+  if(!playing){
+    objEl.textContent=st.phase==='lobby'?(others.size>=1?'Ready. Tap START GAME.':'Waiting for another player...'):'';
+  }else if(role==='controller'){
+    objEl.textContent='Terminals done: '+doneN+'/3. '+(st.power?'Cut the power to slow them.':'Power is out.');
+  }else{
+    objEl.textContent=st.power?'Terminals done: '+doneN+'/3. Find: '+TERMS.filter((t,i)=>(st.terms[i]||0)<st.termNeed).map(t=>t.name).join(', '):'POWER OUT. Go to the Generator Room (far east) and hold REPAIR. '+st.repair+'/'+st.need;
+  }
+  startP.style.display=(st.phase==='lobby'&&others.size>=1)?'block':'none';
   repP.style.display=(playing&&role==='survivor'&&!st.power&&dGen<130)?'block':'none';
+  termIdx=nearT;
+  termP.style.display=(playing&&role==='survivor'&&st.power&&nearT>=0)?'block':'none';
   ctlP.style.display=(playing&&role==='controller')?'block':'none';
   if(playing&&role==='controller'){
     const e=curEn(),cd=Math.max(0,en.cdEnd-performance.now());
@@ -328,6 +392,21 @@ function frame(now){
     lightsBtn.disabled=!st.power||cd>0||e<2;
     lightsBtn.textContent=cd>0?'RECHARGING '+Math.ceil(cd/1000)+'s':'LIGHTS OFF (2)';
   }
+  if(!playing)holdStop();
+
+  if(ended){
+    endEl.style.display='flex';
+    const iWon=(endInfo.winner==='survivors'&&role==='survivor')||(endInfo.winner==='controller'&&role==='controller');
+    endT.textContent=endInfo.winner==='survivors'?'SURVIVORS WIN':'THE CONTROLLER WINS';
+    endT.style.color=iWon?'#7fe0a0':'#e0675a';
+    endS.textContent=endInfo.reason;
+    if(role==='controller'){endC.textContent='You were the Controller.';endC.style.color='#e0675a';}
+    else if(endInfo.controller&&others.has(endInfo.controller)){
+      endC.textContent='The Controller was the '+'colored player shown below.';
+      endC.style.color='hsl('+hueOf(endInfo.controller)+' 55% 62%)';
+      endC.textContent='The Controller was the player with this color.';
+    }else{endC.textContent='The Controller has left the room.';endC.style.color='#b8c0c8';}
+  }else endEl.style.display='none';
 
   const camx=p.x-W/2,camy=p.y-H/2;
 
@@ -355,6 +434,7 @@ function frame(now){
     }
   }
   drawGenerator();
+  drawTerminals();
   for(const o of others.values()){
     drawPerson(o.x,o.y,o.f,'hsl('+o.hue+' 55% 62%)','hsl('+o.hue+' 40% 30%)');
   }
